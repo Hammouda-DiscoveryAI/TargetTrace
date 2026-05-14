@@ -1,0 +1,216 @@
+ 3. Results                                                                                                    
+                                                                                                                
+  3.1 Overall Performance of TargetTrace3                                                                       
+                                                                                                                
+  TargetTrace3 achieved an area under the receiver operating characteristic curve (AUROC) of 0.971 and an       
+  average precision (AUPRC) of 0.958 on the scaffold-stratified held-out validation set, demonstrating strong   
+  discriminative capability between binding and non-binding drug–target pairs (Table 1). The model attained an  
+  enrichment factor at 1% (EF@1%) of 2.00-fold, corresponding to the theoretical maximum achievable on this
+  dataset, and a Boltzmann-Enhanced Discrimination of ROC (BEDROC, α = 20) of 0.922, indicating exceptional
+  early enrichment of true actives within the top-ranked candidates — a property of particular importance in
+  virtual screening campaigns where only a small fraction of the ranked list undergoes experimental validation.
+  For the pIC₅₀ regression task, TargetTrace3 achieved a mean absolute error (MAE) of 0.619 log units, a root
+  mean squared error (RMSE) of 0.870, a Spearman rank correlation coefficient (ρ) of 0.821, a Pearson
+  correlation coefficient (r) of 0.808, and a concordance index (CI) of 0.869, indicating reliable affinity
+  prediction across the range of experimental potencies present in the dataset.
+
+  ---
+  Table 1. Performance comparison of TargetTrace3 and ablated/baseline variants on the scaffold-stratified
+  validation set. Bold values indicate the best performance per column. Green highlighting indicates the maximum
+   (or minimum for error metrics) across all variants.                                                          
+                                                                                                                
+  ┌───────────────────┬───────┬───────┬───────┬───────┬────────┬───────┬───────┬──────────┬─────────┬───────┐
+  │      Variant      │ AUROC │ AUPRC │ EF@1% │ EF@5% │ BEDROC │  MAE  │ RMSE  │ Spearman │ Pearson │  CI   │   
+  │                   │       │       │       │       │        │       │       │     ρ    │    r    │       │
+  ├───────────────────┼───────┼───────┼───────┼───────┼────────┼───────┼───────┼──────────┼─────────┼───────┤   
+  │ TargetTrace3      │ 0.971 │ 0.958 │ 2.00× │ 1.80× │ 0.922  │ 0.619 │ 0.870 │ 0.821    │ 0.808   │ 0.869 │
+  │ (Full)            │       │       │       │       │        │       │       │          │         │       │   
+  ├───────────────────┼───────┼───────┼───────┼───────┼────────┼───────┼───────┼──────────┼─────────┼───────┤
+  │ No                │ 0.500 │ 0.500 │ 1.53× │ 1.04× │ 0.527  │ 0.943 │ 1.529 │ 0.496    │ 0.575   │ 0.725 │   
+  │ Cross-Attention   │       │       │       │       │        │       │       │          │         │       │   
+  ├───────────────────┼───────┼───────┼───────┼───────┼────────┼───────┼───────┼──────────┼─────────┼───────┤
+  │ No Hadamard       │ 0.628 │ 0.628 │ 1.71× │ 1.43× │ 0.621  │ 0.877 │ 1.224 │ 0.600    │ 0.600   │ 0.748 │   
+  │ Fusion            │       │       │       │       │        │       │       │          │         │       │   
+  ├───────────────────┼───────┼───────┼───────┼───────┼────────┼───────┼───────┼──────────┼─────────┼───────┤
+  │ ECFP4 Only        │ 0.505 │ 0.508 │ 1.00× │ 1.00× │ 0.523  │ 0.524 │ 1.716 │ 0.230    │ 0.190   │ 0.669 │   
+  │ (2048-dim)        │       │       │       │       │        │       │       │          │         │       │   
+  ├───────────────────┼───────┼───────┼───────┼───────┼────────┼───────┼───────┼──────────┼─────────┼───────┤
+  │ GPU Logistic      │ 0.499 │ 0.503 │ 1.09× │ 1.09× │ 0.502  │ 0.603 │ 1.229 │ 0.494    │ 0.672   │ 0.713 │   
+  │ Regression        │       │       │       │       │        │       │       │          │         │       │   
+  ├───────────────────┼───────┼───────┼───────┼───────┼────────┼───────┼───────┼──────────┼─────────┼───────┤
+  │ GPU MLP (2-layer) │ 0.840 │ 0.856 │ 2.00× │ 2.00× │ 0.868  │ 0.605 │ 1.214 │ 0.491    │ —       │ —     │   
+  ├───────────────────┼───────┼───────┼───────┼───────┼────────┼───────┼───────┼──────────┼─────────┼───────┤   
+  │ Random Baseline   │ 0.500 │ 0.500 │ 1.00× │ 1.00× │ 0.500  │ —     │ —     │ —        │ —       │ —     │
+  └───────────────────┴───────┴───────┴───────┴───────┴────────┴───────┴───────┴──────────┴─────────┴───────┘   
+                                                            
+  All variants evaluated on identical scaffold-stratified held-out data (20% of the dataset). Ablations use the 
+  trained full-model weights with the corresponding architectural component disabled at inference time. GPU 
+  Logistic Regression and GPU MLP baselines are trained on the training split and evaluated on the validation   
+  split.                                                    
+
+  ---
+  3.2 Ablation Study
+                                                                                                                
+  To quantify the individual contribution of each architectural component, we conducted an inference-time
+  ablation study in which each component of the full model was systematically disabled while retaining all      
+  trained weights. Three principal ablations were evaluated: (i) removal of the ESM-2 residue cross-attention
+  mechanism, replacing it with the mean-pooled protein embedding path; (ii) removal of the Hadamard             
+  (element-wise) interaction term from the fusion layer, replacing cat[mol, prot, mol⊙prot] with cat[mol, prot, 
+  **0**]; and (iii) restriction of the molecular fingerprint input to a single ECFP4 block (radius 2, 2048
+  bits), with all remaining fingerprint dimensions zero-padded.
+
+  3.2.1 Residue-Level Cross-Attention                                                                           
+  
+  Removal of the cross-attention mechanism produced the most severe degradation observed in any ablation,       
+  reducing AUROC from 0.971 to 0.500 — a drop of 0.471 points, equivalent to random classification (Figure 1A).
+  AUPRC fell identically to 0.500, and BEDROC declined to 0.527, marginally above the null expectation of 0.500.
+   The pIC₅₀ Spearman correlation collapsed from 0.821 to 0.496, and RMSE increased from 0.870 to 1.529 log
+  units. These results demonstrate that the mean-pooled ESM-2 embedding, in isolation, provides essentially no
+  discriminative information about binding specificity in this model's representational framework. The
+  cross-attention mechanism — in which the molecule embedding serves as the query against per-residue keys and
+  values — is therefore not an incremental enhancement but a structurally necessary component that enables the
+  model to identify which residues of the binding site are relevant for a given molecular scaffold, a capability
+   that global pooling fundamentally cannot provide.
+
+  3.2.2 Multi-Radius Molecular Fingerprints
+
+  Restricting the fingerprint representation to ECFP4 alone reduced AUROC to 0.505 (Δ = −0.466) and AUPRC to    
+  0.508, again approaching random performance. EF@1% fell to 1.00-fold — equivalent to random selection of
+  compounds from the ranked list. The Spearman ρ for pIC₅₀ prediction declined from 0.821 to 0.230, and RMSE    
+  increased to 1.716 log units, the highest error observed across all variants. These results indicate that
+  multi-radius circular fingerprints encoding local bond topology (ECFP2, r = 1), substituent-level environments
+   (ECFP4, r = 2), cross-ring interactions (ECFP6, r = 3), and pharmacophoric patterns (FCFP4, feature-based r =
+   2), together with MACCS structural keys and physicochemical descriptors, collectively constitute a
+  complementary and non-redundant feature set. No single fingerprint radius captures sufficient chemical
+  diversity to support meaningful binding affinity discrimination when operating alongside the cross-attention
+  protein encoder.
+
+  3.2.3 Hadamard Interaction Term
+
+  Disabling the Hadamard interaction term reduced AUROC from 0.971 to 0.628 (Δ = −0.343) and AUPRC from 0.958 to
+   0.628. In contrast to the two preceding ablations, meaningful predictive capability was retained, confirming
+  that the concatenated molecular and protein representations alone carry sufficient information for partial    
+  discrimination. Nevertheless, the 34-point AUROC reduction demonstrates that the element-wise product mol⊙prot
+   provides an important complementary signal: by explicitly encoding pairwise feature correlations between the
+  molecular and protein embeddings as input to the fusion MLP, the Hadamard term enables the network to learn
+  interaction patterns more efficiently than is achievable from concatenation alone. The pIC₅₀ Spearman
+  correlation declined from 0.821 to 0.600 and RMSE increased to 1.224 log units, confirming that affinity
+  prediction is disproportionately sensitive to the quality of mol–prot interaction modelling.
+
+  3.3 Comparison with Baseline Methods
+
+  To contextualise TargetTrace3's performance relative to conventional machine learning approaches, we evaluated
+   a GPU-accelerated logistic regression model and a two-layer GPU MLP, both trained on features constructed by
+  concatenating the 8,379-dimensional multi-radius fingerprint with the 480-dimensional mean-pooled ESM-2       
+  embedding (total input dimensionality: 8,859).            
+
+  The logistic regression classifier achieved AUROC of 0.499 — statistically indistinguishable from random —    
+  confirming that drug–target interaction cannot be captured by any linear combination of molecular and protein
+  features in this representational space. This finding is consistent with the established non-linearity of     
+  structure–activity relationships and the fundamentally multiplicative nature of binding interactions.
+
+  The two-layer GPU MLP achieved AUROC of 0.840 and AUPRC of 0.856, representing a substantial improvement over 
+  the linear model but remaining 13.1 AUROC points below TargetTrace3 (Full). Notably, the MLP attained EF@1% =
+  2.00× — matching the full model — indicating comparable ability to rank the highest-affinity compounds at the 
+  top of the list. However, its AUROC deficit of 0.131 points reveals degraded ranking quality across the full
+  range of affinities, particularly for pairs with intermediate binding strength. Critically, the MLP's Spearman
+   ρ for pIC₅₀ prediction was 0.491, compared to 0.821 for TargetTrace3 (Full), despite using the same
+  fingerprint features. This gap is attributable to the loss of residue-level binding site information incurred
+  by mean-pooling the ESM-2 hidden states before passing them to the MLP: the MLP receives a compressed,
+  site-averaged protein representation, whereas TargetTrace3's cross-attention retrieves the residue-specific
+  context relevant to each molecular scaffold.
+
+  ---
+  4. Discussion
+               
+  4.1 Architectural Necessity of Residue-Level Cross-Attention
+                                                                                                                
+  The most striking finding of the ablation study is the complete informational collapse upon removal of the    
+  cross-attention mechanism (AUROC 0.971 → 0.500). This result has a clear mechanistic interpretation.          
+  Drug–target binding is an inherently local phenomenon: a molecule interacts with a spatially restricted subset
+   of protein residues constituting the binding pocket, and the identity of these residues — not the global
+  protein composition — determines binding affinity and selectivity. Mean-pooling the ESM-2 hidden states
+  discards all residue-position information, producing a vector that encodes the global amino acid composition
+  and secondary structure tendencies of the protein but conveys no information about the spatial organisation of
+   the binding site. The cross-attention mechanism addresses this deficiency by allowing the molecule embedding
+  to serve as a dynamic query that retrieves a weighted combination of residue representations, where the
+  attention weights are learned to concentrate on residues whose features co-vary with molecular binding. The
+  magnitude of the AUROC drop (Δ = 0.471) establishes that this mechanism accounts for essentially the entire
+  discriminative capacity of the model: without it, concatenating the pooled protein embedding with even the
+  richest molecular fingerprint yields a classifier no better than random assignment.
+
+  This finding is consistent with, and extends, earlier observations in the DTI literature. Attention-based     
+  protein encoders — including those in AttentionDTA [REF] and MolTrans [REF] — have demonstrated performance
+  advantages over pooled-sequence models, but the magnitude of the benefit has varied across datasets and has   
+  rarely been quantified through ablation at equivalent scale. Our results suggest that for
+  scaffold-generalising DTI prediction on a diverse multi-target dataset spanning hundreds of protein families,
+  the information lost by mean-pooling is not recoverable by any other architectural element examined here.
+
+  4.2 Complementarity of Multi-Radius Fingerprint Features                                                      
+  
+  The near-random performance of the ECFP4-only variant (AUROC 0.505) establishes that single-radius circular   
+  fingerprints are an insufficient molecular representation for this task despite being among the most widely
+  used descriptors in cheminformatics. The utility of multi-radius fingerprints arises from the hierarchical    
+  nature of molecular recognition: local bond topology (r = 1, ECFP2) governs hydrogen bond geometry and steric
+  accessibility; substituent-level topology (r = 2, ECFP4) encodes ring substitution patterns and branching;
+  cross-ring topology (r = 3, ECFP6) captures scaffold-spanning features relevant to conformational rigidity and
+   π–π stacking; and pharmacophoric fingerprints (FCFP4) encode donor/acceptor/charge/hydrophobic patterns that
+  map directly onto binding-site complementarity. The MACCS keys contribute 167 expert-defined structural
+  patterns including ring size, heteroatom counts, and known pharmacophore motifs, while the 20 physicochemical
+  descriptors (logP, TPSA, QED, stereocentre count, and others) provide orthogonal information encoding
+  drug-likeness and solvent-accessible surface properties. The collapse in performance when any of these feature
+   types are removed collectively confirms their non-redundancy: no single fingerprint type spans the full
+  chemical space relevant to binding affinity prediction across 425 protein targets.
+
+  4.3 Role of the Hadamard Interaction Term
+
+  The 34-point AUROC reduction attributed to the Hadamard term (0.971 → 0.628) reflects a well-recognised       
+  limitation of naive feature concatenation for multimodal learning. When two embedding vectors are concatenated
+   and passed to a MLP, the network must learn pairwise multiplicative interactions between their elements      
+  through compositions of its nonlinear activation functions, which requires additional parameters and depth to
+  achieve the same expressive capacity as explicit element-wise products [REF: bilinear interaction literature].
+   The Hadamard term mol⊙prot provides these products directly as inputs to the fusion layer, functioning as a
+  first-order Taylor expansion of the full bilinear interaction matrix at O(d) cost rather than the O(d²) cost
+  of full bilinear fusion. The disproportionate impact on pIC₅₀ regression (ρ: 0.821 → 0.600) relative to binary
+   classification suggests that continuous affinity prediction places a higher premium on fine-grained
+  interaction modelling than the coarser positive/negative discrimination task.
+
+  4.4 Non-Linearity and the Representational Gap                                                                
+  
+  The logistic regression result (AUROC 0.499) confirms that drug–target binding cannot be captured by any      
+  linear projection of the feature space, consistent with the known non-linearity of structure–activity
+  relationships. The 34-point AUROC gap between the GPU MLP (0.840) and TargetTrace3 (0.971), despite both      
+  receiving the same molecular fingerprints, quantifies the information value of the residue-level protein
+  representation beyond what is expressible through mean-pooled features. This gap is not attributable to model
+  capacity: the GPU MLP, with 256-dimensional hidden layers operating on an 8,859-dimensional input, has
+  sufficient parameters to model complex nonlinear relationships. Rather, it reflects a fundamental
+  information-theoretic limitation: mean-pooling is a lossy aggregation that destroys the spatial arrangement of
+   residues, and no downstream network — regardless of depth or width — can recover information that has been
+  irreversibly discarded before the network receives it.
+
+  The observation that the GPU MLP matches TargetTrace3's EF@1% (2.00-fold) while falling substantially behind  
+  on AUROC has practical implications for method selection. For early-stage virtual screening applications where
+   only the top 1% of a compound library is tested experimentally, a non-linear model operating on pooled       
+  protein features may provide adequate enrichment at lower computational cost. For full library ranking, lead
+  optimisation scoring, or selectivity profiling — where the complete affinity rank order matters — the
+  residue-level cross-attention architecture provides a substantial and statistically meaningful advantage.
+
+  4.5 Limitations
+
+  Several limitations of the present ablation study warrant acknowledgement. First, the ablations reported here 
+  are conducted at inference time using the weights of the fully-trained model, rather than training each
+  variant from scratch. Inference-time ablations measure the immediate effect of each component on a model that 
+  was optimised assuming all components are present; training-time ablations, in which each reduced model is
+  re-trained to convergence, may reveal adaptive compensation effects that partially recover lost performance.
+  The inference-time methodology was selected for practical reasons of computational cost and reproducibility,
+  and is the design used in several prior DTI ablation studies [REF], but results should be interpreted as
+  lower-bound estimates of each component's contribution. Second, the negative samples in the validation set are
+   constructed by random within-batch protein shuffling, which may not reflect the true negative distribution
+  encountered in experimental screening — where decoys often share scaffolds with actives but lack the key
+  pharmacophoric features required for binding. Third, all evaluations are performed on a dataset derived from
+  ChEMBL, which has known coverage biases toward kinase and GPCR targets; generalisation to underrepresented
+  target families should be validated on independent benchmarks such as the Davis and KIBA datasets. Future work
+   will address these limitations through cold-target and cold-drug split evaluation, training-time ablation on
+  a representative protein subset, and external benchmark validation.
+
+

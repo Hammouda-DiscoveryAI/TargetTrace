@@ -1,0 +1,10 @@
+﻿Metric,Value,Description
+AUROC,0.9546,Area Under ROC — binary DTI classification
+AUPRC,0.9394,Average Precision — robust to class imbalance
+EF @ 1%,1.96×,Enrichment Factor at 1% — virtual screening standard
+EF @ 5%,1.94×,Enrichment Factor at 5%
+BEDROC α=20,0.9707,Boltzmann-Enhanced Discrimination of ROC
+pIC50 MAE,0.738,Mean Absolute Error on pIC50 (log-scale)
+pIC50 RMSE,0.990,Root Mean Squared Error on pIC50
+Spearman r,0.7250,Rank correlation for pIC50 predictions
+Pearson r,0.7247,Linear correlation for pIC50 predictions
