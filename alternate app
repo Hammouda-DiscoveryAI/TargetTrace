@@ -1,0 +1,33 @@
+  Option 1: Gradio (easiest migration, ~1 day)                                                                  
+                                                                   
+  Built specifically for ML apps. No full-script reruns, streaming predictions, and real-time training progress 
+  are first-class features.                                                                                   
+                                                                                                                
+  Best fit for TargetTrace because:                         
+  - gr.Progress() replaces the threading hack for training updates
+  - Tabbed layout maps 1:1 to your current pages                                                                
+  - gr.Dataframe, gr.Plot handle batch prediction and charts natively
+  - Inference streaming via yield                                                                               
+                                                                                                                
+  import gradio as gr                                                                                           
+                                                                                                                
+  def predict(smiles, sequence):                                                                                
+      results = _predict(smiles, sequence)
+      return pd.DataFrame(results)                                                                              
+                                                            
+  def train_model(epochs, progress=gr.Progress()):                                                              
+      for ep, total, loss, acc, mae in _train_generator(epochs):
+          progress(ep / total, desc=f"Epoch {ep}/{total} — loss {loss:.3f}")                                    
+      return "Done"                                                                                             
+                                                                                                                
+  with gr.Blocks() as app:                                                                                      
+      with gr.Tab("Predict"):                                                                                   
+          smiles_in = gr.Textbox(label="SMILES")            
+          seq_in    = gr.Textbox(label="Protein sequence (optional)")                                           
+          out_table = gr.Dataframe()                                                                            
+          gr.Button("Predict").click(predict, [smiles_in, seq_in], out_table)                                   
+      with gr.Tab("Train"):                                                                                     
+          epochs = gr.Slider(5, 50, value=10)               
+          gr.Button("Train").click(train_model, epochs, gr.Textbox())                                           
+                                                                                                                
+  Tradeoff: Less flexible layout than Streamlit. Not great for complex multi-column dashboards.  

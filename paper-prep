@@ -1,0 +1,272 @@
+                                                                                                                                                                                                                                                                                
+● ---                                                                       
+  TargetTrace: A Self-Learning Multi-Encoder Cross-Attention Framework for Simultaneous Drug Target Identification and Potency Prediction                                                                                                                                         
+                                                                                                                                                                                                                                                                                  
+  ---                                                                                                                                                                                                                                                                             
+  1. Introduction                                                                                                                                                                                                                                                                 
+                                                                                                                                                                                                                                                                                  
+  Drug discovery is one of the most resource-intensive endeavours in modern science, with average development timelines exceeding a decade and costs approaching $2.6 billion per approved therapeutic [1]. A central challenge in early-stage discovery is identifying which     
+  biological targets a candidate compound modulates, and at what potency — information that determines both therapeutic utility and liability before expensive wet-laboratory assays are undertaken. Computational methods for predicting drug-target interactions (DTI) therefore
+   occupy a critical position in the discovery pipeline.                                                                                                                                                                                                                          
+                                                                                                                                                                                                                                                                                  
+  Classical quantitative structure-activity relationship (QSAR) approaches represent compounds as fixed-length descriptor vectors and learn target-specific regressors, but are inherently single-target and unable to generalise across the protein space [2]. The emergence of  
+  deep learning enabled more expressive molecular representations, first through convolutional networks over fingerprint matrices [3], and subsequently through graph neural networks (GNNs) operating directly on the molecular graph [4,5]. These models substantially improved
+  predictive performance for known targets, yet they continued to treat molecular structure in isolation from protein structure.                                                                                                                                                  
+                                                            
+  Parallel advances in protein representation learning — culminating in transformer-based protein language models pre-trained on hundreds of millions of sequences — have produced embeddings of remarkable quality that capture evolutionary, structural, and functional         
+  information simultaneously [6,7]. Models such as ESM-2 [7] encode per-residue contextual representations that implicitly encode secondary and tertiary structural propensities, enabling downstream tasks including fold prediction and functional site annotation without
+  requiring experimental structure determination.                                                                                                                                                                                                                                 
+                                                            
+  The integration of molecular and protein representations into a joint DTI model has been explored through several architectures. Concatenation-based fusion of pre-computed features forms the simplest baseline [8]; graph-based message passing over heterogeneous            
+  molecule-protein graphs provides a more expressive alternative [9]; and cross-attention mechanisms drawn from natural language processing have recently been applied to learn residue-level interaction patterns between a ligand and its binding site [10,11]. However, most
+  existing frameworks either discard per-residue protein information in favour of global pooled embeddings, use a single molecular representation, or lack mechanisms for online incorporation of newly measured data.                                                            
+                                                            
+  We present TargetTrace, a multi-encoder cross-attention architecture that simultaneously addresses target identification (multi-class classification across hundreds of protein classes) and potency prediction (pIC50 regression, differentiated per target) within a single   
+  forward pass. TargetTrace fuses three orthogonal molecular representations — rule-based circular fingerprints, a transformer-derived contextual SMILES embedding, and a graph convolutional encoding of the atom-bond topology — with per-residue ESM-2 protein language model
+  embeddings via a cross-attention module. The system is implemented as an interactive web application with a self-learning loop that continuously incorporates new ChEMBL data, re-trains from the latest checkpoint, and expands its output heads to accommodate newly          
+  encountered targets without retraining from scratch. To our knowledge, TargetTrace is the first publicly interactive system to combine these four concurrent representation streams with a self-learning deployment interface.
+
+  ---
+  2. Methods
+
+  2.1 Data Acquisition and Curation
+
+  Bioactivity data were sourced from the ChEMBL database (release 33) [12] via the chembl_webresource_client Python API. Records were retrieved for 472 human single-protein targets spanning kinases, GPCRs, nuclear receptors, ion channels, proteases, and epigenetic enzymes. 
+  For each target, bioactivity measurements of types IC₅₀, Kᵢ, K_d, and EC₅₀ were retained; only records with a standard unit of nanomolar (nM) and an equality relation ("=") were included to ensure comparability across assay formats.
+                                                                                                                                                                                                                                                                                  
+  Potency was expressed as the logarithmic pIC50 transform:                                                                                                                                                                                                                       
+  
+  $$\text{pIC}{50} = 9 - \log{10}([\text{activity}]_{\text{nM}})$$                                                                                                                                                                                                                
+                                                            
+  This transformation normalises the dynamic range, maps nanomolar activity (pIC₅₀ ≈ 9) through micromolar activity (pIC₅₀ ≈ 3), and renders potency directly interpretable relative to the 1 nM and 1 µM pharmacological thresholds. After deduplication by SMILES–target pair,  
+  the final dataset comprised 848,315 records covering 472 protein targets and 222,371 unique canonical SMILES strings. Training data are stored in a local SQLite database (bioactivity.db) with provenance tracking and a trained flag to support incremental updates.
+                                                                                                                                                                                                                                                                                  
+  Protein amino acid sequences were retrieved via the UniProt REST API using the UniProt accession numbers associated with each ChEMBL target record.                                                                                                                             
+  
+  2.2 Molecular Representation                                                                                                                                                                                                                                                    
+                                                            
+  TargetTrace encodes each molecule using three independently trained branches whose outputs are subsequently fused.                                                                                                                                                              
+                                                            
+  Fingerprint branch. A 4,273-dimensional fixed-length descriptor vector is computed for each SMILES string using RDKit [13]. This vector concatenates: ECFP4 circular fingerprints (2,048 bits, Morgan radius 2) [14], capturing local atomic environments; ECFP6 fingerprints   
+  (2,048 bits, Morgan radius 3), capturing longer-range topological context; MACCS structural keys (167 bits) [15], encoding presence or absence of expert-defined pharmacophoric fragments; and ten physicochemical descriptors (logP, topological polar surface area,
+  nitrogen/oxygen count, molecular weight, hydrogen bond donors and acceptors, rotatable bonds, aromatic ring count, fraction sp³ carbon, and molar refractivity). Fingerprints are binary and require no model inference, making them both computationally cheap and             
+  interpretable.                                            
+
+  Contextual SMILES branch. ChemBERTa (seyonec/ChemBERTa-zinc-base-v1) [16], a RoBERTa-based transformer pre-trained on 500 million SMILES strings from the ZINC database, is used to produce a 768-dimensional [CLS] token embedding that captures long-range dependencies in the
+   SMILES string. To reduce sensitivity to the arbitrary atom ordering imposed by SMILES notation, SMILES augmentation is applied at training time: for each canonical SMILES, up to N = 2 additional random SMILES representations of the same molecule are generated using
+  RDKit's MolToSmiles(doRandom=True, canonical=False) [17]. All variants are pre-computed and cached; during training, one variant is sampled uniformly at random per epoch, forcing the model to learn chemistry invariant to canonical ordering rather than memorising token    
+  positions.                                                
+
+  Graph convolutional branch. Each molecule is converted to a fully connected padded graph with a maximum of 50 heavy atoms (accounting for 94% of the ChEMBL dataset). Atom features (41-dimensional per atom) encode atom type (12 element classes plus "other"), degree, formal
+   charge, hybridisation state, aromaticity, ring membership, and total hydrogen count — each represented as a one-hot vector with an explicit "other" bucket. Bond weights are encoded in the adjacency matrix as 1.0 (single), 1.5 (aromatic), 2.0 (double), and 3.0 (triple).
+  The adjacency matrix is symmetrically normalised as $\tilde{A} = D^{-1/2} A D^{-1/2}$ with self-loops (where $D$ is the degree matrix), following the formulation of Kipf and Welling [18].                                                                                     
+                                                            
+  A three-layer Graph Convolutional Network (GCN) processes the graph:
+
+  $$H^{(l+1)} = \sigma!\left(\tilde{A} H^{(l)} W^{(l)}\right)$$                                                                                                                                                                                                                   
+  
+  with layer widths [41 → 128 → 128 → 256]. Batch normalisation and ReLU activations are applied after each layer except the last. A masked global pooling strategy concatenates the mean-pooled and max-pooled representations over real (non-padding) atoms, and a linear       
+  projection maps the 512-dimensional concatenation back to 256 dimensions.
+                                                                                                                                                                                                                                                                                  
+  The three branches are concatenated (768-dimensional total) and passed through a two-layer fusion MLP:                                                                                                                                                                          
+  
+  $$\mathbf{m} = \text{MLP}\text{mol}([\mathbf{f}\text{fp};, \mathbf{f}\text{bert};, \mathbf{f}\text{gnn}]) \in \mathbb{R}^{256}$$                                                                                                                                                
+                                                            
+  2.3 Protein Representation                                                                                                                                                                                                                                                      
+                                                            
+  Protein sequences are encoded using ESM-2 (facebook/esm2_t12_35M_UR50D) [7], a 34 M-parameter transformer pre-trained on 250 million UniRef50 sequences via masked language modelling. ESM-2 produces a 480-dimensional contextual embedding for each residue position. Two     
+  derived representations are used:
+                                                                                                                                                                                                                                                                                  
+  1. Global pooled embedding: mean-pooling across all residue positions yields a 480-dimensional vector summarising the overall sequence composition and structural propensity, analogous to a protein-level "fingerprint".                                                       
+  2. Per-residue sequence: the first 128 residue embeddings (truncated from the maximum 512 cached) are retained as a (128 × 480)-dimensional matrix. These capture the spatially distributed information necessary for residue-level interaction modelling.
+                                                                                                                                                                                                                                                                                  
+  Both representations are pre-computed on first encounter and cached to disk as pickled arrays. Subsequent training and inference epochs incur no re-embedding cost; only novel sequences trigger on-the-fly ESM-2 inference. This design reduces the pre-computation bottleneck 
+  to a one-time cost that amortises across all downstream training runs.                                                                                                                                                                                                          
+                                                                                                                                                                                                                                                                                  
+  2.4 Cross-Attention Mechanism                             
+
+  The central architectural innovation of TargetTrace is the cross-attention module that conditions the molecular representation on the protein sequence context. Given the molecule query $\mathbf{q} = \mathbf{m}$ (256-dimensional, from Section 2.2), the per-residue protein 
+  embeddings are first projected to a common dimension:
+                                                                                                                                                                                                                                                                                  
+  $$K = V = \text{Linear}\text{KV}(H\text{prot}) \in \mathbb{R}^{L \times 256}$$                                                                                                                                                                                                  
+  
+  where $H_\text{prot} \in \mathbb{R}^{L \times 480}$ is the residue embedding matrix and $L \leq 128$. Multi-head cross-attention with 8 heads is then applied:                                                                                                                  
+                                                            
+  $$\mathbf{a} = \text{MultiheadAttention}(\mathbf{q}, K, V, \text{mask}) \in \mathbb{R}^{256}$$                                                                                                                                                                                  
+                                                            
+  A key-padding mask excludes padded positions (residues beyond the actual sequence length) from the softmax normalisation, ensuring attention weights are computed only over real residues. The output is normalised via a residual LayerNorm [19]:                              
+                                                            
+  $$\mathbf{a} \leftarrow \text{LayerNorm}(\mathbf{a})$$                                                                                                                                                                                                                          
+                                                            
+  This mechanism allows the model to learn which protein residues are most relevant to a given molecule's interaction, effectively implementing a soft-attention over the binding environment.                                                                                    
+                                                            
+  2.5 Multi-Task Output Heads and Training Objective                                                                                                                                                                                                                              
+                                                            
+  The final representation is formed by concatenating the molecule representation $\mathbf{m}$, the global protein representation $\mathbf{p} = \text{MLP}\text{prot}(\mathbf{e}\text{pool})$, and the cross-attention output $\mathbf{a}$:                                       
+                                                            
+  $$\mathbf{z} = \text{MLP}_\text{fuse}([\mathbf{m};, \mathbf{p};, \mathbf{a}]) \in \mathbb{R}^{128}$$                                                                                                                                                                            
+                                                            
+  where the fusion MLP has architecture [768 → 512 → 256 → 128] with ReLU activations, batch normalisation, and dropout ($p = 0.2$). Two parallel output heads are applied to $\mathbf{z}$:                                                                                       
+                                                            
+  $$\hat{\mathbf{y}}\text{cls} = W\text{cls},\mathbf{z} \in \mathbb{R}^N$$                                                                                                                                                                                                        
+  $$\hat{\mathbf{p}} = W_\text{pot},\mathbf{z} \in \mathbb{R}^N$$
+                                                                                                                                                                                                                                                                                  
+  where $N$ is the number of target classes. The target classification head produces logits for all $N$ proteins simultaneously; the potency head produces an independent pIC50 estimate for each protein class. During inference, the top-$k$ predicted targets are returned     
+  alongside their associated pIC50 estimates, making predictions explicitly per-target rather than global.
+                                                                                                                                                                                                                                                                                  
+  The composite training loss is:                           
+
+  $$\mathcal{L} = \mathcal{L}\text{CE}(\hat{\mathbf{y}}\text{cls},, y) + 0.3\cdot\mathcal{L}\text{Huber}(\hat{p}{y},, p)$$                                                                                                                                                        
+  
+  where $y$ is the true target class index, $p$ is the normalised pIC50 (z-scored using dataset mean and standard deviation), and $\hat{p}_y$ selects the potency prediction for the correct target. The Huber loss ($\delta = 1.0$) down-weights outliers relative to mean       
+  squared error, improving robustness to noisy potency measurements. The 0.3 coefficient was set empirically to balance the scales of the two loss terms.
+                                                                                                                                                                                                                                                                                  
+  Class imbalance across the 472 targets (count range: tens to thousands of records per class) is addressed through two complementary mechanisms: (1) inverse-frequency class weights in the cross-entropy loss, clamped at 10× the median weight to prevent extreme up-weighting 
+  of near-empty classes; and (2) a WeightedRandomSampler that oversamples rare targets during epoch construction, ensuring that each training batch has approximately uniform target representation in expectation.
+                                                                                                                                                                                                                                                                                  
+  2.6 Training Protocol                                     
+
+  All models were optimised using AdamW [20] with learning rate $10^{-4}$ and weight decay $10^{-4}$. A cosine annealing schedule [21] decays the learning rate from $10^{-4}$ to $10^{-6}$ over the training run. Gradient norms are clipped to 1.0 to prevent instability in    
+  early epochs. Batch sizes of 32 and 64 were used for training and validation respectively. An 80/20 stratified train-validation split was applied with a fixed random seed. pIC50 values were globally normalised (z-score) using the dataset-wide mean and standard deviation;
+  these statistics are stored alongside the model checkpoint and applied consistently at inference time.                                                                                                                                                                          
+                                                            
+  When CUDA is available, Automatic Mixed Precision (AMP) training is enabled via PyTorch's GradScaler and autocast, providing approximately 2–3× throughput improvement over full float32 training on modern GPU hardware, with negligible effect on final accuracy.             
+  
+  2.7 Self-Learning and Incremental Updates                                                                                                                                                                                                                                       
+                                                            
+  TargetTrace is designed to improve continuously as new experimental data become available. New bioactivity records — whether imported via the ChEMBL API, uploaded as CSV files, or entered manually — are stored in the SQLite database with a trained=0 flag. Subsequent      
+  training runs read all records and fine-tune the model from the most recent saved checkpoint rather than re-initialising weights.
+                                                                                                                                                                                                                                                                                  
+  When new target classes are encountered that were absent from prior training runs, the expand_targets method grows both output heads:                                                                                                                                           
+  
+  W_new = [W_old | W_rand]                                                                                                                                                                                                                                                        
+                                                                                                                                                                                                                                                                                  
+  The existing learned weights for known targets are preserved exactly; only the rows corresponding to new classes are randomly initialised. This allows TargetTrace to assimilate new biological targets incrementally without catastrophic forgetting of previously learned     
+  associations.                                                                                                                                                                                                                                                                   
+                                                                                                                                                                                                                                                                                  
+  2.8 Memory-Efficient Dataset Construction                 
+
+  A key engineering challenge at scale is dataset memory management. A naïve implementation storing full per-residue ESM-2 arrays (shape 512 × 480 × 4 bytes ≈ 1 MB) in every sample of an 848k-record dataset would require approximately 840 GB of RAM — exceeding all practical
+   system limits. TargetTrace instead maintains separate shared dictionaries indexed by protein sequence hash and SMILES string respectively. Each unique protein contributes a single (128 × 480) float16 array (~120 KB) to the protein dictionary regardless of how many
+  bioactivity records reference it; each unique SMILES contributes a single entry to the molecule dictionary. Per-sample records store only string keys (~200 bytes each). With 472 unique proteins and 222k unique SMILES, the peak dataset memory footprint is reduced to       
+  approximately 7 GB. GCN arrays and BERT embeddings are stored as float16 and cast to float32 at mini-batch assembly time.
+
+  2.9 Implementation
+
+  TargetTrace is implemented in Python 3.11 using PyTorch 2.0+ for all neural network components. Molecular operations use RDKit 2023.3. The interactive interface is built with Streamlit 1.35+. ESM-2 and ChemBERTa are accessed via Hugging Face Transformers and are unloaded 
+  from GPU memory immediately after pre-computation to free VRAM for model training. The complete system runs within a single process using background threading to decouple the training loop from the Streamlit WebSocket server, ensuring interface responsiveness during
+  multi-hour training runs. All source code and trained model checkpoints are stored locally; no cloud inference is required at deployment time.                                                                                                                                  
+                                                            
+  ---
+  3. Discussion
+               
+  3.1 Rationale for Multi-Encoder Molecular Representation
+                                                                                                                                                                                                                                                                                  
+  The three molecular encoders in TargetTrace are deliberately complementary rather than redundant. Circular fingerprints (ECFP4/6) are provably equivalent to Weisfeiler–Lehman graph subtree kernels [22] and offer well-understood coverage of the medicinal chemistry space,  
+  but they discard all three-dimensional and conformational information and cannot generalise to substructures not seen during the hash collision–free bit assignment. MACCS keys encode expert pharmacophoric knowledge that may not emerge spontaneously from data-driven       
+  representations with limited training sets. ChemBERTa's contextual SMILES embeddings capture global molecular topology and long-range dependencies — ring systems, scaffold connectivity — that circular fingerprints fragment into local substructures; the SMILES augmentation
+   strategy used at training time specifically forces the contextual encoder to disentangle meaningful chemical information from the arbitrary linearisation artefacts of canonical SMILES notation. The GCN encoder operates on the actual atom-bond graph and can learn
+  continuous, real-valued interaction patterns between bonded and non-bonded atom types that binary fingerprints cannot represent.
+
+  By fusing all three views, TargetTrace is less susceptible to the failure modes of any individual representation. A molecule that is poorly characterised by fingerprints (unusual scaffold) may still be well-characterised by its graph topology; a molecule with an unusual  
+  atom type outside the GCN's training distribution may still be captured by the contextual SMILES embedding. This ensemble-of-representations strategy mirrors the practice in the broader multimodal learning literature of combining complementary views to improve robustness
+  and calibration.                                                                                                                                                                                                                                                                
+                                                            
+  3.2 Cross-Attention as a Model of Binding Site Selectivity                                                                                                                                                                                                                      
+  
+  The cross-attention mechanism is conceptually motivated by the binding site hypothesis: a small molecule's biological activity is determined not by its absolute physical properties but by the complementarity of its shape and electrostatics to a specific protein cavity. By
+   conditioning the molecule representation on the protein's residue-level embeddings via attention, TargetTrace can in principle learn which residue patterns are most predictive of a given ligand series' activity — analogous to identifying which protein residues line the
+  binding pocket.                                                                                                                                                                                                                                                                 
+                                                            
+  Critically, this selectivity is not hardcoded into the architecture but emerges from training data: residue positions that consistently associate with ligand binding in the training set will receive high attention weights, while structurally peripheral residues will be   
+  down-weighted. This is a strictly weaker signal than structure-based docking, which directly models the three-dimensional complementarity, but requires no experimental structure — only the amino acid sequence. For the large fraction of human protein targets without
+  experimentally resolved structures, and for targets where AlphaFold2 structures exist but binding site geometry is uncertain, this sequence-based cross-attention represents a practical middle ground.                                                                         
+                                                            
+  A limitation of the current cross-attention design is the truncation of residue sequences to 128 positions, which may exclude important binding determinants in long proteins or those with C-terminal binding domains. Future work could explore hierarchical attention that   
+  first identifies candidate interaction windows along the full sequence, then applies fine-grained cross-attention within those windows.
+                                                                                                                                                                                                                                                                                  
+  3.3 Self-Learning and the Bootstrapping Problem                                                                                                                                                                                                                                 
+  
+  TargetTrace's self-learning design reflects a practical reality in drug discovery: the most valuable experimental data are proprietary and cannot be pre-loaded. ChEMBL provides an excellent public training corpus for initialisation, but any deployment in a laboratory     
+  setting would rapidly accumulate new measurements for novel compounds and targets. The incremental checkpoint fine-tuning strategy means that each new training run starts from a well-initialised weight configuration rather than random initialisation, dramatically reducing
+   the data needed for the model to learn about a new target class — in the few-shot regime, the cross-attention module can leverage structural similarity to known targets' protein embeddings even when few direct measurements for the new target exist.                       
+                                                            
+  The expand_targets weight-preservation strategy avoids catastrophic forgetting, a well-documented failure mode of naïve sequential fine-tuning [23]. By initialising only the new output neurons randomly while preserving all earlier-learned weights — including the shared   
+  feature extraction layers — TargetTrace exhibits behaviour analogous to a neural network classifier growing its output layer without disturbing its feature representations.
+                                                                                                                                                                                                                                                                                  
+  3.4 Class Imbalance and the Long Tail of Protein Space                                                                                                                                                                                                                          
+  
+  The ChEMBL dataset exhibits severe class imbalance: highly tractable, well-studied targets such as kinase CDK2 or the protease thrombin may contribute thousands of records, while more recently characterised or less pharmacologically explored targets contribute fewer than 
+  one hundred. Without correction, gradient descent on a cross-entropy loss would train almost exclusively on the most populated classes, producing a model that achieves high aggregate accuracy by ignoring rare targets entirely.
+                                                                                                                                                                                                                                                                                  
+  The combined inverse-frequency weighting and weighted random sampling strategy addresses this at both the loss level and the sampling level. The clamping of class weights at 10× the median prevents the pathological case where a class with a single example receives a loss 
+  weight so large it destabilises training. Nevertheless, the fundamental limitation of class imbalance — that rare classes genuinely lack sufficient chemical diversity to define a well-generalised decision boundary — cannot be fully overcome by reweighting alone. Few-shot
+  learning strategies, prototype-based classifiers, or targeted data augmentation for rare targets represent productive directions for future improvement.                                                                                                                        
+                                                            
+  3.5 Limitations and Future Directions
+
+  Several limitations merit explicit acknowledgement. First, the current system performs target identification and potency prediction in a single model, but the two tasks are not equally well-calibrated: target classification is bounded by the quality of ChEMBL annotation  
+  (which reflects historical assay formats, not biological ground truth), while pIC50 regression is confounded by cross-assay variability, selectivity profiles, and species differences. A multi-task architecture jointly trained on both objectives implicitly assumes that
+  features useful for target discrimination are also useful for potency prediction — an assumption that may not hold for all chemical series.                                                                                                                                     
+                                                            
+  Second, the model operates on amino acid sequence alone. A protein's binding site geometry, electrostatic surface potential, and conformational dynamics — all critical determinants of drug binding — are only implicitly encoded in the ESM-2 residue embeddings and are not  
+  explicitly represented. Integration with structural data, either from experimentally determined co-crystal structures in the PDB or from AlphaFold2 predicted models, could substantially improve binding site specificity.
+                                                                                                                                                                                                                                                                                  
+  Third, TargetTrace does not currently model polypharmacology explicitly: a compound that binds multiple targets with comparable affinity will receive a single top-prediction rather than a calibrated multi-target profile. Reformulating target prediction as a multi-label   
+  problem — assigning independent binary labels per target rather than a single categorical label — would more accurately reflect the polypharmacological reality of most small molecules.
+                                                                                                                                                                                                                                                                                  
+  Finally, the evaluation framework described here relies on held-out ChEMBL records for validation. ChEMBL data are known to exhibit significant redundancy at the scaffold level [24], meaning that standard random splitting may overestimate generalisation performance.      
+  Scaffold-stratified splits — ensuring that the train and validation sets contain non-overlapping Bemis–Murcko scaffolds [25] — would provide a more stringent and realistic estimate of prospective performance on genuinely novel chemical series.
+                                                                                                                                                                                                                                                                                  
+  ---                                                       
+  References
+            
+  [1] DiMasi, J. A., Grabowski, H. G., & Hansen, R. W. (2016). Innovation in the pharmaceutical industry: New estimates of R&D costs. Journal of Health Economics, 47, 20–33.
+                                                                                                                                                                                                                                                                                  
+  [2] Hansch, C., & Fujita, T. (1964). ρ-σ-π analysis. A method for the correlation of biological activity and chemical structure. Journal of the American Chemical Society, 86(8), 1616–1626.                                                                                    
+                                                                                                                                                                                                                                                                                  
+  [3] Duvenaud, D. K., et al. (2015). Convolutional networks on graphs for learning molecular fingerprints. NeurIPS, 28.                                                                                                                                                          
+                                                            
+  [4] Yang, K., et al. (2019). Analyzing learned molecular representations for property prediction. Journal of Chemical Information and Modeling, 59(8), 3370–3388.                                                                                                               
+                                                            
+  [5] Xu, K., et al. (2019). How powerful are graph neural networks? ICLR.                                                                                                                                                                                                        
+                                                            
+  [6] Elnaggar, A., et al. (2022). ProtTrans: Towards cracking the language of life's code through self-supervised deep learning and high performance computing. IEEE Transactions on Pattern Analysis and Machine Intelligence, 44(10), 7112–7127.                               
+                                                            
+  [7] Lin, Z., et al. (2023). Evolutionary-scale prediction of atomic-level protein structure with a language model. Science, 379(6637), 1123–1130.                                                                                                                               
+                                                            
+  [8] Davis, M. I., et al. (2011). Comprehensive analysis of kinase inhibitor selectivity. Nature Biotechnology, 29(11), 1046–1051.                                                                                                                                               
+                                                            
+  [9] Ioannidis, V. N., et al. (2020). Few-shot link prediction via graph neural networks for drug-drug interaction prediction. arXiv:2007.10261.                                                                                                                                 
+                                                            
+  [10] Huang, K., et al. (2021). MolTrans: Molecular interaction transformer for drug-target interaction prediction. Bioinformatics, 37(6), 830–836.                                                                                                                              
+                                                            
+  [11] Chen, L., et al. (2020). TransformerCPI: Improving compound–protein interaction prediction by sequence-based deep learning with self-attention mechanism and label reversal experiments. Bioinformatics, 36(16), 4406–4414.                                                
+                                                            
+  [12] Mendez, D., et al. (2019). ChEMBL: Towards direct deposition of bioassay data. Nucleic Acids Research, 47(D1), D930–D940.                                                                                                                                                  
+                                                            
+  [13] Landrum, G. (2006). RDKit: Open-source cheminformatics. Available at: https://www.rdkit.org.                                                                                                                                                                               
+                                                            
+  [14] Rogers, D., & Hahn, M. (2010). Extended-connectivity fingerprints. Journal of Chemical Information and Modeling, 50(5), 742–754.                                                                                                                                           
+                                                            
+  [15] Durant, J. L., et al. (2002). Reoptimization of MDL keys for use in drug discovery. Journal of Chemical Information and Computer Sciences, 42(6), 1273–1280.                                                                                                               
+                                                            
+  [16] Chithrananda, S., Grand, G., & Ramsundar, B. (2020). ChemBERTa: Large-scale self-supervised pretraining for molecular property prediction. arXiv:2010.09885.                                                                                                               
+                                                            
+  [17] Bjerrum, E. J. (2017). SMILES enumeration as data augmentation for neural network modeling of molecules. arXiv:1703.07076.                                                                                                                                                 
+                                                            
+  [18] Kipf, T. N., & Welling, M. (2017). Semi-supervised classification with graph convolutional networks. ICLR.                                                                                                                                                                 
+                                                            
+  [19] Ba, J. L., Kiros, J. R., & Hinton, G. E. (2016). Layer normalisation. arXiv:1607.06450.                                                                                                                                                                                    
+                                                            
+  [20] Loshchilov, I., & Hutter, F. (2019). Decoupled weight decay regularisation. ICLR.                                                                                                                                                                                          
+                                                            
+  [21] Loshchilov, I., & Hutter, F. (2017). SGDR: Stochastic gradient descent with warm restarts. ICLR.                                                                                                                                                                           
+                                                            
+  [22] Shervashidze, N., et al. (2011). Weisfeiler-Lehman graph kernels. Journal of Machine Learning Research, 12, 2539–2561.                                                                                                                                                     
+                                                            
+  [23] Kirkpatrick, J., et al. (2017). Overcoming catastrophic forgetting in neural networks. PNAS, 114(13), 3521–3526.                                                                                                                                                           
+                                                            
+  [24] Sheridan, R. P., et al. (2013). Experimental error, kurtosis, activity cliffs, and methodology: What limits the predictivity of quantitative structure-activity relationship models? Journal of Chemical Information and Modeling, 53(3), 683–695.                         
+                                                            
+  [25] Bemis, G. W., & Murcko, M. A. (1996). The properties of known drugs. 1. Molecular frameworks. Journal of Medicinal Chemistry, 39(15), 2887–2893.   

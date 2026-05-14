@@ -1,0 +1,6 @@
+  # Step 1 — seed the database from your existing 437 ChEMBL chunks                                                                                                
+  python bootstrap.py --limit 200                                                                                                                                  
+                                                                                                                                                                   
+  # Step 2 — launch the app                                                                                                                                        
+  streamlit run app.py
+
