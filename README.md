@@ -94,7 +94,7 @@ TargetTrace/
 ├── prepare_bindingdb.py
 ├── profile_train.py
 │
-├── plot_*.py               # Figure generation scripts (paper)
+├── plot_*.py               
 ├── draw_architecture.py
 ├── make_all_figures.py
 │
